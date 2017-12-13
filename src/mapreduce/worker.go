@@ -33,8 +33,8 @@ func (wk *Worker) DoTask(arg *DoTaskArgs, _ *struct{}) error {
 		wk.name, arg.Phase, arg.TaskNumber, arg.File, arg.NumOtherPhase)
 
 	wk.Lock()
-	wk.nTasks += 1
-	wk.concurrent += 1
+	wk.nTasks++
+	wk.concurrent++
 	nc := wk.concurrent
 	wk.Unlock()
 
@@ -52,7 +52,7 @@ func (wk *Worker) DoTask(arg *DoTaskArgs, _ *struct{}) error {
 	}
 
 	wk.Lock()
-	wk.concurrent -= 1
+	wk.concurrent--
 	wk.Unlock()
 
 	fmt.Printf("%s: %v task #%d done\n", wk.name, arg.Phase, arg.TaskNumber)

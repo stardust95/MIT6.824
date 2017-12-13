@@ -13,17 +13,17 @@ import "fmt"
 //
 func schedule(jobName string, mapFiles []string, nReduce int, phase jobPhase, registerChan chan string) {
 	var ntasks int
-	var n_other int // number of inputs (for reduce) or outputs (for map)
+	var nOther int // number of inputs (for reduce) or outputs (for map)
 	switch phase {
 	case mapPhase:
 		ntasks = len(mapFiles)
-		n_other = nReduce
+		nOther = nReduce
 	case reducePhase:
 		ntasks = nReduce
-		n_other = len(mapFiles)
+		nOther = len(mapFiles)
 	}
 
-	fmt.Printf("Schedule: %v %v tasks (%d I/Os)\n", ntasks, phase, n_other)
+	fmt.Printf("Schedule: %v %v tasks (%d I/Os)\n", ntasks, phase, nOther)
 
 	// All ntasks tasks have to be scheduled on workers, and only once all of
 	// them have been completed successfully should the function return.
