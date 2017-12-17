@@ -5,6 +5,11 @@ import (
 	"net/rpc"
 )
 
+const (
+	// RPCConnType connection type of RPC
+	RPCConnType = "unix"
+)
+
 // What follows are RPC types and methods.
 // Field names must start with capital letters, otherwise RPC will break.
 

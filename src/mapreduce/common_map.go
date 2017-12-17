@@ -1,6 +1,10 @@
 package mapreduce
 
 import (
+	"io/ioutil"
+	"path/filepath"
+	"os"
+	"encoding/json"
 	"hash/fnv"
 )
 
@@ -53,10 +57,57 @@ func doMap(
 	//
 	// Remember to close the file after you have written all the values!
 	//
+
+	var err error
+	// Read input file
+	inFilePath, _ := filepath.Abs(inFile)
+	content, err := ioutil.ReadFile(inFilePath)
+	if err != nil {
+		panic(err)
+	}
+
+	mapResult := mapF(inFile, string(content))
+
+	// Distribute key value pairs
+	kvs := make([][]KeyValue, nReduce)
+	for _, kv := range mapResult {
+		hash := ihash(kv.Key) % nReduce
+		kvs[hash] = append(kvs[hash], kv)
+	}
+
+	// Open output files
+	outputs := make([]*os.File, nReduce)
+	for i := range outputs {
+		outputPath := reduceName(jobName, mapTaskNumber, i)
+		// debug("Map Task #%d Open file %s\n", mapTaskNumber, outputPath)
+		outputs[i], err = os.OpenFile(outputPath, os.O_RDWR | os.O_CREATE | os.O_TRUNC, 0755)
+		if err != nil {
+			panic(err)
+		}
+		// write output file(JSON)
+		enc := json.NewEncoder(outputs[i])
+		err := enc.Encode(kvs[i])
+		outputs[i].Close()
+
+		if err != nil {
+			panic(err)
+		}
+	}
 }
 
 func ihash(s string) int {
 	h := fnv.New32a()
 	h.Write([]byte(s))
 	return int(h.Sum32() & 0x7fffffff)
+}
+
+// TODO: delete
+func DoMap(
+	jobName string, // the name of the MapReduce job
+	mapTaskNumber int, // which map task this is
+	inFile string,
+	nReduce int, // the number of reduce task that will be run ("R" in the paper)
+	mapF func(file string, contents string) []KeyValue,
+){
+	doMap(jobName, mapTaskNumber, inFile, nReduce, mapF)
 }

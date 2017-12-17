@@ -1,9 +1,12 @@
 package main
 
 import (
+	"strconv"
+	"strings"
 	"fmt"
-	"mapreduce"
 	"os"
+	"unicode"
+	"mit6.824/src/mapreduce"
 )
 
 //
@@ -14,7 +17,20 @@ import (
 // of key/value pairs.
 //
 func mapF(filename string, contents string) []mapreduce.KeyValue {
-	// TODO: you have to write this function
+	
+	var result []mapreduce.KeyValue
+	table := make(map[string]int)
+	tokens := strings.FieldsFunc(contents, func (c rune) bool{
+		return !unicode.IsLetter(c)
+	})
+	for _, token := range tokens {
+		table[token]++
+	}
+	for key, value := range table {
+		result = append(result, mapreduce.KeyValue{key, strconv.Itoa(value)})
+	}
+	
+	return result
 }
 
 //
@@ -23,7 +39,15 @@ func mapF(filename string, contents string) []mapreduce.KeyValue {
 // any map task.
 //
 func reduceF(key string, values []string) string {
-	// TODO: you also have to write this function
+	sum := 0
+	for _, v := range values {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			panic(err)
+		}
+		sum += n
+	}
+	return strconv.Itoa(sum)
 }
 
 // Can be run in 3 ways:
@@ -31,6 +55,9 @@ func reduceF(key string, values []string) string {
 // 2) Master (e.g., go run wc.go master localhost:7777 x1.txt .. xN.txt)
 // 3) Worker (e.g., go run wc.go worker localhost:7777 localhost:7778 &)
 func main() {
+	// mapreduce.DoMap("testjob", 0, "./src/main/wc.go", 1, mapF)
+	// mapreduce.DoReduce("testjob", 0, "reduce-output", 1, reduceF)
+	// return
 	if len(os.Args) < 4 {
 		fmt.Printf("%s: see usage comments in file\n", os.Args[0])
 	} else if os.Args[1] == "master" {

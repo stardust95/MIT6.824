@@ -93,10 +93,13 @@ func RunWorker(MasterAddress string, me string,
 	wk.Map = MapFunc
 	wk.Reduce = ReduceFunc
 	wk.nRPC = nRPC
+
 	rpcs := rpc.NewServer()
 	rpcs.Register(wk)
-	os.Remove(me) // only needed for "unix"
-	l, e := net.Listen("unix", me)
+	if RPCConnType == "unix" {
+		os.Remove(me) // only needed for "unix"
+	}
+	l, e := net.Listen(RPCConnType, me)
 	if e != nil {
 		log.Fatal("RunWorker: worker ", me, " error: ", e)
 	}
