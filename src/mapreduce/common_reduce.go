@@ -94,14 +94,3 @@ func doReduce(
 	}
 
 }
-
-// TODO: delete
-func DoReduce(
-	jobName string, // the name of the whole MapReduce job
-	reduceTaskNumber int, // which reduce task this is
-	outFile string, // write the output here
-	nMap int, // the number of map tasks that were run ("M" in the paper)
-	reduceF func(key string, values []string) string,
-) {
-	doReduce(jobName, reduceTaskNumber, outFile, nMap, reduceF)
-}

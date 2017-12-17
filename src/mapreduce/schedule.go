@@ -3,7 +3,6 @@ package mapreduce
 import (
 	"fmt"
 	"sync"
-	"log"
 )
 
 var wg sync.WaitGroup
@@ -36,22 +35,28 @@ func schedule(jobName string, mapFiles []string, nReduce int, phase jobPhase, re
 	// multiple tasks.
 	//
 	for index := 0; index < ntasks; index++ {
-		address := <- registerChan
+		// address := <- registerChan
 		wg.Add(1)
-		taskNum := index
-		go func (address string, file string){
-			defer wg.Done()		// execute first to make sure wg.Done() will be called even fail
+		go func (taskNum int, file string){
+			defer wg.Done()	// execute first to make sure wg.Done() will be called even fail
 
-			ok := call(address, "Worker.DoTask", 
-				&DoTaskArgs{jobName, file, phase, taskNum, nOther}, nil)
-			if ok {
-				go func(){
-					registerChan <- address
-				}()
-			}else{
-				log.Fatal("calling failed")
+			for{	// call RPC in loop in order to retry at failure
+				address := <- registerChan
+				ok := call(address, "Worker.DoTask", 
+					&DoTaskArgs{jobName, file, phase, taskNum, nOther}, nil)
+				if ok {
+					// NOTE: the channel operation below must be executed asynchronously!
+					//  because "registerChan" is not a buffer channel, 
+					//  it will be blocked if nobody accept from it => cause wg.Done() won't be executed
+					go func(){
+						registerChan <- address
+					}()
+					break
+				}else{
+					fmt.Println("Worker ", address," failed at task #", taskNum)
+				}
 			}
-		}(address, mapFiles[index])
+		}(index, mapFiles[index])
 	}
 
 	wg.Wait()

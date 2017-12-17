@@ -100,14 +100,3 @@ func ihash(s string) int {
 	h.Write([]byte(s))
 	return int(h.Sum32() & 0x7fffffff)
 }
-
-// TODO: delete
-func DoMap(
-	jobName string, // the name of the MapReduce job
-	mapTaskNumber int, // which map task this is
-	inFile string,
-	nReduce int, // the number of reduce task that will be run ("R" in the paper)
-	mapF func(file string, contents string) []KeyValue,
-){
-	doMap(jobName, mapTaskNumber, inFile, nReduce, mapF)
-}
