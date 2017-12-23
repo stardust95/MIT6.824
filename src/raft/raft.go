@@ -23,7 +23,17 @@ import "mit6.824/src/labrpc"
 // import "bytes"
 // import "encoding/gob"
 
+// State :
+type State int
 
+const (
+	// StateFollower :
+	StateFollower State = iota
+	// StateCandidate :
+	StateCandidate
+	// StateLeader :
+	StateLeader
+)
 
 // ApplyMsg :
 // as each Raft peer becomes aware that successive log entries are
@@ -39,29 +49,31 @@ type ApplyMsg struct {
 
 // LogEntry :
 type LogEntry struct {
-	Term 		int
-	Command		interface{}
+	Term    int
+	Command interface{}
 }
 
 // Raft :
 // A Go object implementing a single Raft peer.
 //
 type Raft struct {
-	mu        	sync.Mutex          // Lock to protect shared access to this peer's state
-	peers     	[]*labrpc.ClientEnd // RPC end points of all peers
-	persister 	*Persister          // Object to hold this peer's persisted state
-	me        	int                 // this peer's index into peers[]
+	mu        sync.Mutex          // Lock to protect shared access to this peer's state
+	peers     []*labrpc.ClientEnd // RPC end points of all peers
+	persister *Persister          // Object to hold this peer's persisted state
+	me        int                 // this peer's index into peers[]
 
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 	currentTerm int
-	votedFor 	int
-	log			[]LogEntry
-	commitIndex	int
-	lastApplied	int
-	nextIndex	[]int
-	matchIndex	[]int
+	votedFor    int
+	log         []LogEntry
+	commitIndex int
+	lastApplied int
+	nextIndex   []int
+	matchIndex  []int
+
+	state State
 }
 
 // GetState :
@@ -72,6 +84,8 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here (2A).
+	term = rf.currentTerm
+	isleader = (rf.state == StateLeader)
 	return term, isleader
 }
 
@@ -106,17 +120,16 @@ func (rf *Raft) readPersist(data []byte) {
 	}
 }
 
-
 // RequestVoteArgs :
 // RequestVote RPC arguments structure.
 // field names must start with capital letters!
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
-	Term			int
-	CandidateID		int
-	LastLogIndex	int
-	LastLogTerm		int
+	Term         int
+	CandidateID  int
+	LastLogIndex int
+	LastLogTerm  int
 }
 
 // RequestVoteReply :
@@ -125,8 +138,16 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
-	Term			int
-	VoteGranted		bool
+	Term        int
+	VoteGranted bool
+}
+// compareLog :
+//	return true if A is older than B
+func compareLog(lastTermA int, lastIndexA int, lastTermB int, lastIndexB int) bool{
+	if lastTermA != lastTermB {
+		return lastTermA < lastTermB
+	}
+	return lastIndexA < lastIndexB
 }
 
 // RequestVote RPC handler.
@@ -134,17 +155,17 @@ type RequestVoteReply struct {
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	logLen := len(rf.log)
-	if rf.currentTerm > args.Term ||
-		rf.votedFor != 0 ||
-		rf.votedFor != args.CandidateID || 
-		rf.log[logLen-1].Term > args.LastLogTerm ||
-		logLen > args.LastLogIndex {
-			reply.VoteGranted = false
-			return
+	if rf.currentTerm > args.Term ||		// if the rpc is outdated
+		(rf.votedFor != 0 && 
+			rf.votedFor != args.CandidateID) ||		// if already voted for another candidate
+		compareLog(rf.log[logLen-1].Term, logLen, 
+			args.LastLogTerm, args.LastLogIndex) == false {	// if the candidate is outdated
+		reply.VoteGranted = false
+		return
 	}
 	if rf.currentTerm < args.Term {
 		rf.currentTerm = args.Term
-		
+		rf.state = StateFollower
 	}
 	reply.VoteGranted = true
 }
@@ -152,32 +173,35 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // AppendEntries RPC handler.
 //
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-	if rf.currentTerm > args.Term || 
-		len(rf.log) <= args.PrevLogIndex ||
-		rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
+	if rf.currentTerm > args.Term ||		// if the rpc is outdated
+		len(rf.log) <= args.PrevLogIndex ||		// if the log doesn't contain prevLogIndex
+		rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {	// if the log entry doesn't match the prev log
 		reply.Success = false
 		return
 	}
+	if rf.currentTerm < args.Term {
+		rf.currentTerm = args.Term
+		rf.state = StateFollower
+	}
 	reply.Success = true
-	
+
 }
 
 // AppendEntriesArgs :
 type AppendEntriesArgs struct {
-	Term 			int
-	LeaderID		int
-	PrevLogIndex	int
-	PrevLogTerm		int
-	Entries			[]LogEntry
-	LeaderCommit	int
+	Term         int
+	LeaderID     int
+	PrevLogIndex int
+	PrevLogTerm  int
+	Entries      []LogEntry
+	LeaderCommit int
 }
 
 // AppendEntriesReply :
 type AppendEntriesReply struct {
-	Term			int
-	Success			bool
+	Term    int
+	Success bool
 }
-
 
 //
 // example code to send a RequestVote RPC to a server.
@@ -218,8 +242,6 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	return ok
 }
 
-
-
 // Start :
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
@@ -240,7 +262,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	// Your code here (2B).
 
-
 	return index, term, isLeader
 }
 
@@ -255,15 +276,16 @@ func (rf *Raft) Kill() {
 }
 
 // Make :
-// the service or tester wants to create a Raft server. the ports
-// of all the Raft servers (including this one) are in peers[]. this
-// server's port is peers[me]. all the servers' peers[] arrays
-// have the same order. persister is a place for this server to
-// save its persistent state, and also initially holds the most
-// recent saved state, if any. applyCh is a channel on which the
-// tester or service expects Raft to send ApplyMsg messages.
+// The service or tester wants to create a Raft server.
+// The ports of all the Raft servers (including this one) are in peers[].
+// This server's port is peers[me].
+// All the servers' peers[] arrays have the same order.
+// Persister is a place for this server to save its persistent state,
+//   and also initially holds the most recent saved state, if any. 
+// applyCh is a channel on which the tester or service expects
+//   Raft to send ApplyMsg messages.
 // Make() must return quickly, so it should start goroutines
-// for any long-running work.
+//   for any long-running work.
 //
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
@@ -273,10 +295,14 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
-
+	rf.state = StateFollower
+	rf.commitIndex = 0
+	rf.lastApplied = 0
+	rf.currentTerm = 0
+	rf.votedFor = 0
+	
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
-
 
 	return rf
 }
