@@ -1,7 +1,9 @@
 package raft
 
-import "log"
-
+import (
+	"log"
+	"math/rand"
+)
 // Debug : Debugging
 const Debug = 1
 
@@ -11,4 +13,9 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 		log.Printf(format, a...)
 	}
 	return
+}
+
+// Random :
+func Random(min int, max int) int {
+	return rand.Intn(max - min) + min
 }
