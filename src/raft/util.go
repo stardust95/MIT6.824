@@ -5,7 +5,7 @@ import (
 	"math/rand"
 )
 // Debug : Debugging
-const Debug = 1
+const Debug = 0
 
 // DPrintf :
 func DPrintf(format string, a ...interface{}) (n int, err error) {
