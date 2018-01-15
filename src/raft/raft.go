@@ -450,7 +450,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
         rf.lastApplied++
         applyMsg := ApplyMsg{rf.lastApplied, rf.log[rf.lastApplied].Command, false, nil}
         applyCh <- applyMsg
-        rf.print("applied log entry %v", rf.log[rf.lastApplied])
+        rf.print("applied log entry %d:%v", rf.lastApplied, rf.log[rf.lastApplied])
         // Apply rf.log[lastApplied] into its state machine
       }
       rf.mu.Unlock()
@@ -537,10 +537,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
               if index == rf.me || rf.state != StateLeader {
                 break
               }
-              if rf.nextIndex[index] <= 0 || rf.nextIndex[index] > len(rf.log){
-                rf.print("Error: rf.nextIndex[%d] = %d, logLen = %d", index, rf.nextIndex[index], len(rf.log))
-              }
+              // if rf.nextIndex[index] <= 0 || rf.nextIndex[index] > len(rf.log){
+              //   rf.print("Error: rf.nextIndex[%d] = %d, logLen = %d", index, rf.nextIndex[index], len(rf.log))
+              // }
               rf.mu.Lock()
+              logLen := len(rf.log)
               appendEntries := rf.log[rf.nextIndex[index]:]
               prevIndex := rf.nextIndex[index]-1
               aeArgs := AppendEntriesArgs{currentTerm, rf.me,
@@ -553,8 +554,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
               rf.mu.Lock()
               if ok && rf.currentTerm == aeArgs.Term {  // ensure the reply is not outdated
                 if aeReply.Success {
-                  rf.matchIndex[index] = len(rf.log)-1
-                  rf.nextIndex[index] = len(rf.log)
+                  rf.matchIndex[index] = logLen-1
+                  rf.nextIndex[index] = logLen
                   rf.mu.Unlock()
                   break
                 }else {
@@ -566,9 +567,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
                     break
                   }else{                              // prevIndex not match, decrease prevIndex
                     // rf.nextIndex[index]--
-                    if aeReply.ConflictFromIndex <= 0 || aeReply.ConflictFromIndex >= len(rf.log){
-                      rf.print("Error: aeReply.ConflictFromIndex from %d = %d, logLen = %d", aeReply.ConflictFromIndex, index,  len(rf.log))
-                    }
+                    // if aeReply.ConflictFromIndex <= 0 || aeReply.ConflictFromIndex >= logLen{
+                    //   rf.print("Error: aeReply.ConflictFromIndex from %d = %d, logLen = %d", aeReply.ConflictFromIndex, index, logLen)
+                    // }
                     rf.nextIndex[index] = aeReply.ConflictFromIndex
                   }
                 }
@@ -588,6 +589,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
           }
           // If majority has the log entry of index N
           if followerHas > len(rf.peers) / 2 {
+            rf.print("set commitIndex to %d, matchIndex = %v", N, rf.matchIndex)
             rf.commitIndex = N
           }
         }
