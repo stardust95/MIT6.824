@@ -1,6 +1,6 @@
 package raftkv
 
-import "labrpc"
+import "mit6.824/src/labrpc"
 import "testing"
 import "os"
 
@@ -10,7 +10,7 @@ import "math/rand"
 import "encoding/base64"
 import "sync"
 import "runtime"
-import "raft"
+import "mit6.824/src/raft"
 import "fmt"
 
 func randstring(n int) string {

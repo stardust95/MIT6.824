@@ -1,20 +1,23 @@
 package raftkv
 
 const (
-	OK       = "OK"
-	ErrNoKey = "ErrNoKey"
+	OK       	= "OK"
+	ErrNoKey 	= "ErrNoKey"
+	OpPut			= "Put"
+	OpAppend	= "Append"
 )
 
 type Err string
 
 // Put or Append
 type PutAppendArgs struct {
-	Key   string
-	Value string
-	Op    string // "Put" or "Append"
+	Key   	string
+	Value 	string
+	Op    	string // "Put" or "Append"
 	// You'll have to add definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	SeqNum	string
 }
 
 type PutAppendReply struct {
@@ -25,6 +28,7 @@ type PutAppendReply struct {
 type GetArgs struct {
 	Key string
 	// You'll have to add definitions here.
+	SeqNum	string
 }
 
 type GetReply struct {

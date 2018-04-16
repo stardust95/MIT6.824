@@ -2,9 +2,9 @@ package raftkv
 
 import (
 	"encoding/gob"
-	"labrpc"
+  "mit6.824/src/labrpc"
 	"log"
-	"raft"
+  "mit6.824/src/raft"
 	"sync"
 )
 
@@ -14,34 +14,68 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
 		log.Printf(format, a...)
 	}
+	
 	return
 }
 
-
+// Op :
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	Key 		string
+	Value 	string
+	Type 		string
 }
 
+
+// RaftKV :
 type RaftKV struct {
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	me      int
 	rf      *raft.Raft
 	applyCh chan raft.ApplyMsg
 
 	maxraftstate int // snapshot if log grows this big
-
+	data		map[string]string
 	// Your definitions here.
 }
 
 
 func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
+
+	if args.Key == "" {
+		reply.Err = ErrNoKey
+		return
+	}
+	DPrintf("Get")
+
+	_, ok := kv.rf.GetState()
+	if ok {
+		kv.mu.RLock()
+		reply.Value = kv.data[args.Key]
+		kv.mu.RUnlock()
+	}else{
+		reply.WrongLeader = true
+	}
 }
 
 func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	if args.Key == ""  {
+		reply.Err = ErrNoKey
+		return
+	}
+	DPrintf("PutAppend")
+
+	_, ok := kv.rf.GetState()
+	if ok {
+		kv.rf.Start(Op{args.Key, args.Value, args.Op})
+	}else{
+		reply.WrongLeader = true
+	}
+
 }
 
 //
@@ -81,8 +115,27 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+	kv.data = make(map[string]string)
 
 	// You may need initialization code here.
+
+	go func(){
+		for appliedMsg := range kv.applyCh{
+			op := appliedMsg.Command.(Op)
+			
+			kv.mu.Lock()
+			if op.Type == OpPut {
+				kv.data[op.Key] = op.Value
+			}else{
+				if val, ok := kv.data[op.Key]; ok {
+					kv.data[op.Key] = val + op.Value
+				}else{
+					kv.data[op.Key] = op.Value
+				}
+			}
+			kv.mu.Unlock()
+		}
+	}()
 
 	return kv
 }
