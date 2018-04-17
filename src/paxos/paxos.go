@@ -1,5 +1,7 @@
 package paxos
 
+// TODO: Solve concurrent map write
+
 //
 // Paxos library, to be included in an application.
 // Multiple applications will run, each including
@@ -20,16 +22,19 @@ package paxos
 // px.Min() int -- instances before this seq have been forgotten
 //
 
-import "net"
-import "net/rpc"
-import "log"
+import (
+	// "errors"
+	"log"
+	"net"
+	"net/rpc"
 
-import "os"
-import "syscall"
-import "sync"
-import "sync/atomic"
-import "fmt"
-import "math/rand"
+	"fmt"
+	"math/rand"
+	"os"
+	"sync"
+	"sync/atomic"
+	"syscall"
+)
 
 // px.Status() return values, indicating
 // whether an agreement has been decided,
@@ -44,24 +49,28 @@ const (
 )
 
 type PrepareRequestArgs struct {
-	seq        int
-	proposeNum int
+	Seq        int
+	ProposeNum int
+	From       int
+	Done       int
 }
 
 type PrepareResponse struct {
-	pok     bool
-	acceptN int
-	acceptV interface{}
+	Pok     bool
+	AcceptN int
+	AcceptV interface{}
 }
 
 type AcceptRequestArgs struct {
-	seq        int
-	proposeNum int
-	v          interface{}
+	Seq        int
+	ProposeNum int
+	V          interface{}
+	From       int
+	Done       int
 }
 
 type AcceptResponse struct {
-	aok bool
+	Aok bool
 }
 
 type Paxos struct {
@@ -74,11 +83,12 @@ type Paxos struct {
 	me         int // index into peers[]
 
 	// For Proposer
-	// instances    	map[int]interface{}
 	proposerNums map[int]int
 	max          int
-	min          int
-	doneOfPeers  map[string]int
+	// min          	int
+	done        int
+	doneOfPeers map[int]int
+
 	// For Accpetor
 	prepareMaxN map[int]int
 	acceptN     map[int]int
@@ -123,47 +133,92 @@ func call(srv string, name string, args interface{}, reply interface{}) bool {
 
 func (px *Paxos) print(seq int, format string, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
-		return DPrintf(fmt.Sprintf("Instance %d(Peer %d): ", seq, px.me)+format, a...)
+		return DPrintf(fmt.Sprintf("Instance %d(Node %d): ", seq, px.me)+format, a...)
 	}
 	return 0, nil
 }
 
-// Prepare(K) handler of acceptor
-func (px *Paxos) HandlePrepare(args PrepareRequestArgs, resp *PrepareResponse) {
-	resp.pok = true
-	resp.acceptN = 0
-	resp.acceptV = nil
-	px.mu.Lock()
-	if maxN, exist := px.prepareMaxN[args.seq]; exist {
-		if maxN > args.proposeNum {
-			resp.pok = false // reject
-		} else {
-			px.prepareMaxN[args.seq] = args.proposeNum
-			if acceptN, ok := px.acceptN[args.seq]; ok {
-				resp.acceptN = acceptN
-				resp.acceptV = px.acceptV[args.seq]
-				// return PrepareResponse{true, acceptN, px.acceptV[args.seq]}
-			}
+// must be invoked in lock
+func (px *Paxos) forgetDone() {
+	minDone := px.done
+	for _, v := range px.doneOfPeers {
+		if minDone > v {
+			minDone = v
 		}
 	}
-	px.mu.Unlock()
+
+	for i := range px.acceptV {
+		if i <= minDone {
+			delete(px.acceptV, i)
+			delete(px.acceptN, i)
+			delete(px.prepareMaxN, i)
+		}
+	}
+
+}
+
+// Prepare(K) handler of acceptor
+func (px *Paxos) HandlePrepare(args *PrepareRequestArgs, resp *PrepareResponse) error {
+	resp.Pok = true
+	resp.AcceptN = 0
+	resp.AcceptV = nil
+
+	px.mu.Lock()
+	defer px.mu.Unlock()
+	if args.Done > px.doneOfPeers[args.From] {
+		px.doneOfPeers[args.From] = args.Done
+		px.forgetDone()
+	}
+	if px.max < args.Seq {
+		px.max = args.Seq
+	}
+	if maxN, exist := px.prepareMaxN[args.Seq]; exist {
+		if maxN > args.ProposeNum {
+			resp.Pok = false // reject
+		} else {
+			px.prepareMaxN[args.Seq] = args.ProposeNum
+			if acceptN, ok := px.acceptN[args.Seq]; ok {
+				resp.AcceptN = acceptN
+				resp.AcceptV = px.acceptV[args.Seq]
+			}
+			px.print(args.Seq, "prepared [%d](pok, %v, %v)", args.ProposeNum, resp.AcceptN, resp.AcceptV)
+		}
+	} else {
+		px.prepareMaxN[args.Seq] = args.ProposeNum
+		px.print(args.Seq, "prepared [%d](pok, <nil>, <nil>)", args.ProposeNum, resp.AcceptV)
+	}
+	return nil
 }
 
 // Accept(K, v) handler of acceptor
-func (px *Paxos) HandleAccept(args AcceptRequestArgs, resp *AcceptResponse) {
-	resp.aok = false
+func (px *Paxos) HandleAccept(args *AcceptRequestArgs, resp *AcceptResponse) error {
+	resp.Aok = false
+
 	px.mu.Lock()
-	if maxN, exist := px.prepareMaxN[args.seq]; exist {
-		if maxN <= args.proposeNum {
-			px.prepareMaxN[args.seq] = args.proposeNum
-			px.acceptN[args.seq] = args.proposeNum
-			px.acceptV[args.seq] = args.v
-			resp.aok = true
-		}
+	defer px.mu.Unlock()
+
+	if args.Done > px.doneOfPeers[args.From] {
+		px.doneOfPeers[args.From] = args.Done
+		px.forgetDone()
 	}
-	px.mu.Unlock()
-	// error
-	log.Fatal("error")
+	if px.prepareMaxN[args.Seq] <= args.ProposeNum {
+		px.prepareMaxN[args.Seq] = args.ProposeNum
+		px.acceptN[args.Seq] = args.ProposeNum
+		px.acceptV[args.Seq] = args.V
+		resp.Aok = true
+		px.print(args.Seq, "accepted [%d, %d](pok)", args.ProposeNum, args.V)
+	}
+	return nil
+}
+
+func (px *Paxos) sendPrepareRequest(server int, args *PrepareRequestArgs, reply *PrepareResponse) bool {
+	ok := call(px.peers[server], "Paxos.HandlePrepare", args, reply)
+	return ok
+}
+
+func (px *Paxos) sendAcceptRequest(server int, args *AcceptRequestArgs, reply *AcceptResponse) bool {
+	ok := call(px.peers[server], "Paxos.HandleAccept", args, reply)
+	return ok
 }
 
 //
@@ -174,50 +229,46 @@ func (px *Paxos) HandleAccept(args AcceptRequestArgs, resp *AcceptResponse) {
 // is reached.
 //
 func (px *Paxos) Start(seq int, v interface{}) {
-	// Your code here.
-
-	go func() { // Proposer thread
-		isDone := false
-		// px.proposerNums[seq] = 0
-		proposeNum := 0
+	go func() { // Proposer start
 		nextTurn := make(chan bool)
 
-		for isDone == false && px.isdead() == false {
-			actualProposeNum := (proposeNum * 10) + px.me
-			px.print(seq, "start Phase 1: Prepare with proposeNum %d", actualProposeNum)
-			var maxNResponse PrepareResponse
+		for !px.isdead() {
+			actualProposeNum := (px.proposerNums[seq] * 10) + px.me
+			px.print(seq, "start Phase 1: Prepare with [%d, %v]", actualProposeNum, v)
+			maxNResponse := PrepareResponse{false, 0, nil}
 			totalResp1 := 0
 			pok := 0
 			var lockPhase1 sync.RWMutex
 
-			for index, addr := range px.peers {
-				go func(idx int, addr string) { // Send request
-					reqArgs := PrepareRequestArgs{seq, actualProposeNum}
+			for index := range px.peers {
+				go func(idx int) { // Send request
+					reqArgs := PrepareRequestArgs{seq, actualProposeNum, px.me, px.done}
 					response := PrepareResponse{}
+					// px.print(seq, "send prepare request to Node %d with %v", idx, reqArgs)
 
 					if idx == px.me {
 						// call by method
-						px.HandlePrepare(reqArgs, &response)
+						px.HandlePrepare(&reqArgs, &response)
 						lockPhase1.Lock()
 						totalResp1++
-						if response.pok {
+						if response.Pok {
 							pok++
-							if response.acceptV != nil && response.acceptN > maxNResponse.acceptN {
-								maxNResponse.acceptN = response.acceptN
-								maxNResponse.acceptV = response.acceptV
+							if response.AcceptV != nil && (maxNResponse.AcceptV == nil|| response.AcceptN > maxNResponse.AcceptN) {
+								maxNResponse.AcceptN = response.AcceptN
+								maxNResponse.AcceptV = response.AcceptV
 							}
 						}
 						lockPhase1.Unlock()
 					} else {
 						// call by rpc
-						ok := call(addr, "Paxos.HandlePrepare", reqArgs, &response)
+						ok := px.sendPrepareRequest(idx, &reqArgs, &response)
 						lockPhase1.Lock()
 						totalResp1++
-						if ok && response.pok {
+						if ok && response.Pok {
 							pok++
-							if response.acceptV != nil && response.acceptN > maxNResponse.acceptN {
-								maxNResponse.acceptN = response.acceptN
-								maxNResponse.acceptV = response.acceptV
+							if response.AcceptV != nil && (maxNResponse.AcceptV == nil|| response.AcceptN > maxNResponse.AcceptN) {
+								maxNResponse.AcceptN = response.AcceptN
+								maxNResponse.AcceptV = response.AcceptV
 							}
 						}
 						lockPhase1.Unlock()
@@ -225,7 +276,7 @@ func (px *Paxos) Start(seq int, v interface{}) {
 
 					lockPhase1.RLock()
 					if totalResp1 == len(px.peers) {
-						px.print(seq, "received %d pok from %d peers", pok, len(px.peers))
+						px.print(seq, "Phase1: received %d pok from %d peers", pok, len(px.peers))
 						if pok > len(px.peers)/2 {
 							nextTurn <- false
 						} else {
@@ -233,36 +284,41 @@ func (px *Paxos) Start(seq int, v interface{}) {
 						}
 					}
 					lockPhase1.RUnlock()
-				}(index, addr) // end go func
+				}(index) // end go func
 			} // end for range px.peers
 
 			if <-nextTurn == false { // if a Propose request has been accepted by majority(Prepare finish)
-				px.print(seq, "start Phase 2: Accept with proposeNum %d", actualProposeNum)
+				if maxNResponse.AcceptV != nil {
+					px.print(seq, "start Phase 2: Accept with [%d, %v]", actualProposeNum, maxNResponse.AcceptV)
+				} else {
+					px.print(seq, "start Phase 2: Accept with [%d, %v]", actualProposeNum, v)
+				}
 				aok := 0
 				totalResp2 := 0
 				var lockPhase2 sync.RWMutex
 
-				for index, addr := range px.peers {
-					go func(idx int, addr string) {
-						reqArgs := AcceptRequestArgs{seq, actualProposeNum, v}
+				for index := range px.peers {
+					go func(idx int) {
+						reqArgs := AcceptRequestArgs{seq, actualProposeNum, v, px.me, px.done}
 						response := AcceptResponse{}
-						if maxNResponse.acceptV != nil {
-							reqArgs.v = maxNResponse.acceptV
+						if maxNResponse.AcceptV != nil {
+							reqArgs.V = maxNResponse.AcceptV
 						}
+						// px.print(seq, "send prepare request to Node %d with %v", idx, reqArgs)
 
 						if idx == px.me {
-							px.HandleAccept(reqArgs, &response)
+							px.HandleAccept(&reqArgs, &response)
 							lockPhase2.Lock()
 							totalResp2++
-							if response.aok {
+							if response.Aok {
 								aok++
 							}
 							lockPhase2.Unlock()
 						} else {
-							ok := call(addr, "Paxos.HandleAccept", reqArgs, &response)
+							ok := px.sendAcceptRequest(idx, &reqArgs, &response)
 							lockPhase2.Lock()
 							totalResp2++
-							if ok && response.aok {
+							if ok && response.Aok {
 								aok++
 							}
 							lockPhase2.Unlock()
@@ -270,7 +326,7 @@ func (px *Paxos) Start(seq int, v interface{}) {
 
 						lockPhase2.RLock()
 						if totalResp2 == len(px.peers) {
-							px.print(seq, "received %d aok from %d peers", aok, len(px.peers))
+							px.print(seq, "Phase2: received %d aok from %d peers", aok, len(px.peers))
 							if aok > len(px.peers)/2 {
 								nextTurn <- false
 							} else {
@@ -279,15 +335,19 @@ func (px *Paxos) Start(seq int, v interface{}) {
 						}
 						lockPhase2.RUnlock()
 
-					}(index, addr)
+					}(index)
+				}
+
+				if <-nextTurn == false { //if an Accept request has been accepted by majority
+					px.print(seq, "propose accepted")
+					break
 				}
 			}
 
-			if <-nextTurn == false { //if an Accept request has been accepted by majority
-				px.print(seq, "propose accepted")
-				isDone = true
-			}
-			proposeNum++
+			px.print(seq, "increased proposerNum")
+			px.mu.Lock()
+			px.proposerNums[seq]++
+			px.mu.Unlock()
 		}
 	}()
 
@@ -301,6 +361,11 @@ func (px *Paxos) Start(seq int, v interface{}) {
 //
 func (px *Paxos) Done(seq int) {
 	// Your code here.
+
+	px.mu.Lock()
+	defer px.mu.Unlock()
+	px.done = seq
+	px.forgetDone()
 }
 
 //
@@ -343,7 +408,15 @@ func (px *Paxos) Max() int {
 //
 func (px *Paxos) Min() int {
 	// You code here.
-	return px.min
+	px.mu.Lock()
+	defer px.mu.Unlock()
+	minDone := px.done
+	for _, v := range px.doneOfPeers {
+		if minDone > v {
+			minDone = v
+		}
+	}
+	return minDone + 1
 }
 
 //
@@ -355,7 +428,15 @@ func (px *Paxos) Min() int {
 //
 func (px *Paxos) Status(seq int) (Fate, interface{}) {
 	// Your code here.
-	
+	px.mu.Lock()
+	defer px.mu.Unlock()
+	if seq <= px.done {
+		return Forgotten, nil
+	}
+
+	if v, exist := px.acceptV[seq]; exist {
+		return Decided, v
+	}
 	return Pending, nil
 }
 
@@ -403,9 +484,10 @@ func Make(peers []string, me int, rpcs *rpc.Server) *Paxos {
 
 	// Your initialization code here.
 	// px.instances = make(map[int]interface{})
-	px.min = 0
+	// px.min = 0
+	px.done = -1
 	px.max = 0
-	px.doneOfPeers = make(map[string]int)
+	px.doneOfPeers = make(map[int]int)
 	px.proposerNums = make(map[int]int)
 
 	px.acceptN = make(map[int]int)
