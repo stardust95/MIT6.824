@@ -74,20 +74,25 @@ type Raft struct {
   peers     []*labrpc.ClientEnd // RPC end points of all peers
   persister *Persister          // Object to hold this peer's persisted state
   me        int                 // this peer's index into peers[]
+  state 		  State
+  isKilled    bool
 
   // Your data here (2A, 2B, 2C).
   // Look at the paper's Figure 2 for a description of what
   // state a Raft server must maintain.
+
+  // Persistent state on all servers: (Updated on stable storage before responding to RPCs)
   currentTerm int
   votedFor    int
   log         []LogEntry
-  commitIndex int
-  lastApplied int
-  nextIndex   []int
-  matchIndex  []int
+  
+  // Volatile state on all servers:
+  commitIndex int     // index of highest log entry known to be committed (initialized to 0, increases monotonically)
+  lastApplied int     // index of highest log entry applied to state machine (initialized to 0, increases monotonically)
 
-  state 		  State
-  isKilled    bool
+  // Volatile state on leaders: (Reinitialized after election)
+  nextIndex   []int   // for each server, index of the next log entry to send to that server (initialized to leader last log index + 1)
+  matchIndex  []int   // for each server, index of highest log entry known to be replicated on server (initialized to 0, increases monotonically)
 }
 
 // GetState :
@@ -267,7 +272,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
       for ; i>0; i--{
         if rf.log[i].Term != conflictTerm {
           break
-        } 
+        }
       }
       reply.ConflictFromIndex = i+1
     }else{
@@ -282,7 +287,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
     }
 
     // update commitIndex
-    if rf.commitIndex < args.LeaderCommit {   // if 
+    if rf.commitIndex < args.LeaderCommit {
       if args.LeaderCommit < len(rf.log)-1 {
         rf.commitIndex = args.LeaderCommit
       }else{
@@ -433,6 +438,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
   rf.votedFor = nilIndex
   rf.lastApplied = 0
   rf.currentTerm = 0
+  // rf.log contains a dummy head
   rf.log = []LogEntry{LogEntry{rf.currentTerm, nil}}
 
   // initialize from state persisted before a crash
@@ -457,6 +463,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
       time.Sleep(50 * time.Millisecond)
     }
   }()
+
+  // candidate thread
   go func() {
     var counterLock sync.Mutex
     for {
@@ -520,6 +528,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
     }
   }()
 
+  // leader thread
   go func(){
     for {
       if rf.isKilled {
@@ -581,9 +590,16 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
         // Find logs that has appended to majority and update commitIndex
         for N := rf.commitIndex+1; N<len(rf.log); N++ {
+          // To eliminate problems like the one in Figure 8,
+          //  Raft never commits log entries from previous terms by count- ing replicas. 
+          if rf.log[N].Term < rf.currentTerm{
+            continue
+          }else if rf.log[N].Term > rf.currentTerm{
+            break
+          }
           followerHas := 0
           for index := range rf.peers {
-            if rf.matchIndex[index] >= N {
+            if rf.matchIndex[index] >= N{
               followerHas++
             }
           }
